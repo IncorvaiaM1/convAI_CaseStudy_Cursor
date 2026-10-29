@@ -1,0 +1,347 @@
+\documentclass[11pt]{article}
+
+% Change "review" to "final" to generate the final (sometimes called camera-ready) version.
+% Change to "preprint" to generate a non-anonymous version with page numbers.
+\usepackage[preprint]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+
+% For proper rendering and hyphenation of words containing Latin characters (including in bib files)
+\usepackage[T1]{fontenc}
+% For Vietnamese characters
+% \usepackage[T5]{fontenc}
+% See https://www.latex-project.org/help/documentation/encguide.pdf for other character sets
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out,
+% but it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+%Including images in your LaTeX document requires adding
+%additional package(s)
+\usepackage{graphicx}
+
+% If the title and author information does not fit in the area allocated, uncomment the following
+%
+%\setlength\titlebox{<dim>}
+%
+% and set <dim> to something 5cm or larger.
+
+\title{Cursor Case Study}
+
+\author{Michael Incorvaia \and Greyson McReynolds \and Heeba Merchant \and Canting Zhu \\
+       ECE 6256 / CS 6604 - Prof. Heck}
+
+
+\begin{document}
+\maketitle
+\begin{abstract}
+This document is a supplement to the general instructions for *ACL authors. It contains instructions for using the \LaTeX{} style files for ACL conferences.
+The document itself conforms to its own specifications, and is therefore an example of what your manuscript should look like.
+These instructions should be used both for papers submitted for review and for final versions of accepted papers.
+\end{abstract}
+
+\section{Cursor Introduction}
+
+Cursor is an AI code editor forked from VS Code. Developed by Anysphere and initially released in 2023, Cursor has revolutionized the software engineering process from a developer point of view. It wraps frontier models (Anthropic, OpenAI, Google, xAI) and its own models (Tab; Composer 2, built on Moonshot's Kimi K2.5) in an agent harness that reads, searches, edits and runs a developer's repo. The user is a developer; the "world" the dialogue acts on is the codebase and terminal.
+
+When technologies such as this come along and fundamentally change how engineers build, it is typical for those to want to focus on continuities, changes, and overall implications on the computing sphere. However, we find that it is also important to survey the decomposition of the technology itself, specifically which aspects of its design contribute to the five classical boxes — understanding, state, policy, generation, and their interfaces. Additionally, we are interested in probing the places where Cursor’s design breaks down, from its pricing and model switching to a support bot that invented a company policy, as we believe they show where the explicit harness ends and the latent model takes over.
+
+\section{Classical Boxes}
+
+Cursor, being a generative AI system, can be decomposed into the five aforementioned fundamental components: understanding, state, policy, generation, and the interfaces connecting them. Understanding involves interpreting user input for meaning and intent. State is the ability to maintain relevant information about the current user interaction and surrounding context. Policy regards determining the next course of action given the current understanding and state. Generation involves the processes in which the system creates an effective response. Finally, interfaces are the ways in which the user communicates with the system as well as how the system interacts with itself. For each of these aspects, we are interested in examining Cursor’s implementation. Additionally, we are also interested in categorizing whether the implementation is explicit or latent in the model.
+
+\subsection{Understanding}
+
+Even prior to a user submitting a prompt, Cursor has already performed work towards ‘understanding’ via an indexing pipeline. Initially, this pipeline divides the codebase into syntactic chunks which are then converted into embeddings. When a user modifies files, Cursor uses a two-part system consisting of Merkle Trees and caching to prevent inefficient recomputation. Merkle trees, hierarchical data structures that use cryptographic hashes to represent files and directories, allow Cursor to efficiently identify which files have changed. From this, the altered chunks can be determined. Then, Cursor reuses the cached embeddings for the unchanged chunks and only generates new embeddings for those that were modified \citep{cursor2025semantic}. 
+
+When a user submits a request, Cursor is able to ‘understand’ the user by searching its indexed codebase for semantically related code. Once the request and relevant code are obtained, this information is passed to an LLM, specifically a Mixture of Experts model that determines how to further reason about the user’s request provided the context \citep{cursor2025composer}. 
+
+We would consider this system to be both explicitly defined as well as latent in the model. It is explicitly defined in the way that the indexing pipeline is intentionally set up for the purpose of understanding the codebase, and thereby, the user’s requests. However, the Mixture of Experts model very evidently utilizes a latent approach to understanding.
+
+
+\subsection{State}
+
+Cursor, very robustly, pulls context from a multitude of avenues. At its most basic level, Cursor pulls static context such as the operating system, git status, and current and recently viewed files \citep{heule2026harness}. However, much of Cursor’s context is dynamically sourced (and dynamically managed). A great example of this is how Cursor manages dialogue context. Cursor is able to retrieve conversation histories from previous prompts. However, especially lengthy conversations are written into files. Cursor can re-read these files when necessary to inform its current context. This is decided on by the underlying LLM, but performed by the agent harness; the harness has the ability to assemble relevant states into the language model’s context window. \citep{katz2026dynamic} Additionally, Cursor has the ability to trigger a self-summarization step when the model is approaching its context limit, allowing it to compress its understanding into a smaller capacity. This is especially useful when working on longer tasks \citep{cursor2026composer1.5}.
+
+From this, we would again consider context to be defined both explicitly and latently. State is explicitly represented and stored, and certain procedures, such as the self-summarizing step, are intentionally included to improve the state. On the other hand, the underlying language model learns to identify relevant information, determine when additional context should be retrieved, and summarize important aspects of the current state.
+
+
+\subsection{Policy}
+
+In the classical decomposition, the policy maps the belief state to the next dialogue act, such as asking, confirming, or acting, and it is learned against a reward that makes the trade-off between asking and acting explicit. In Cursor, the next act is usually a tool call: search the codebase, read a file, make an edit, run a terminal command, ask the user a question, or stop and answer. That choice is made token by token inside whichever model is running, so at its core the policy is latent. However, Cursor does not leave it alone; it shapes the policy at three levels.
+
+The clearest example is Tab, Cursor's autocomplete model. Tab's policy has two actions, show a suggestion or stay silent, and its reward is written down: $+0.75$ for an accepted suggestion, $-0.25$ for a rejected one, and $0$ for showing nothing. A suggestion is therefore only worth showing when its chance of being accepted is above 25\% \citep{jackson2025tabrl}. Cursor trains this policy with on-policy policy gradients on over 400 million requests per day, rolling out a new checkpoint every 1.5 to 2 hours, and the result was 21\% fewer suggestions with a 28\% higher accept rate \citep{jackson2025tabrl}. Rather than adding a separate filter model, Cursor had Tab itself learn when to abstain.
+
+For the agent, Cursor trains its own models inside its own harness. Composer was trained with reinforcement learning on the same tools the product exposes, across hundreds of thousands of sandboxed coding environments, and was pushed to make efficient tool choices, run tools in parallel, and avoid claims made without evidence \citep{cursor2025composer}. Composer 2 also learns its own context summaries. The final task reward is applied to the whole chain, summaries included, so a summary that drops critical information is penalized; this cut compaction error by 50\% compared with a tuned prompt-based baseline while using one fifth of the tokens \citep{cassano2026composer}. In effect, the policy has learned to manage its own state.
+
+For the frontier models Cursor rents, it cannot change the weights, so it adds explicit controls instead. Plan mode has the agent research the codebase, ask clarifying questions, and write an editable plan before changing anything \citep{smith2025planmode}, which works as a user-selectable ``confirm before acting'' policy. Cursor Router, the relaunched Auto mode, is a classifier that picks a model for each request based on its task type and complexity, trained on over 600,000 live requests with user satisfaction as the reward \citep{cursor2026router}. Meanwhile, earlier guardrails such as a cap on tool calls per turn have mostly been removed as the models improved \citep{heule2026harness}.
+
+Our own Grok 4.6 High Fast run shows this policy at work (Table~\ref{tab:grok-trace}). We recovered the full conversation from Cursor's local chat history: 24 tool calls, or 19 without its four to-do updates and one tool lookup. Before editing, the agent searched for the relevant symbols and then read six files in a single parallel batch, the same behavior Cursor trains Composer toward. After editing, it wrote tests of its own beyond the six it was given; its reasoning summary states that ``a hidden test suite likely exists.'' It then ran the suite and checked the CLI output on the sample data before stopping. Every one of these choices was made by the model; the harness only supplied the tools.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}l c p{0.62\columnwidth}@{}}
+    \hline
+    \textbf{Calls} & \textbf{Box} & \textbf{What the agent did} \\
+    \hline
+    2--3   & U   & Globbed the repo and searched for \texttt{class Library}, \texttt{fees\_owed} and \texttt{def report} \\
+    4      & S   & Wrote a to-do plan \\
+    5--10  & S/P & Read six files in one parallel batch \\
+    14--16 & G   & Edited \texttt{library.py} (twice) and \texttt{cli.py} \\
+    17     & G   & Wrote its own tests for the premium grace period, the \$10 cap, still-out loans and the report line \\
+    19     & I   & \texttt{pytest} blocked: ``Terminal unavailable'' sandbox error ($t = 48$\,s) \\
+    22     & P   & Reran outside the sandbox: 10 passed ($t = 50$\,s) \\
+    23     & P   & Ran the CLI on sample data to check the report ($t = 64$\,s), then stopped \\
+    \hline
+  \end{tabular}
+  \caption{Annotated excerpt of our Grok 4.6 High Fast run, recovered from Cursor's local chat history. Calls number all 24 tool calls in order. U, S, P, G and I mark understanding, state, policy, generation and interfaces.}
+  \label{tab:grok-trace}
+\end{table}
+
+We would consider policy to be latent, but increasingly owned by Cursor. The next action is chosen inside the model, but Cursor shapes that choice with a hand-written reward (Tab), reinforcement learning in its own environment (Composer), and a learned proxy for user satisfaction (Router). None of these rewards observe whether the user's actual goal was met.
+
+\subsection{Generation}
+
+Generation is the most latent of the five boxes. The code and text that Cursor produces come straight from the underlying model, whether that is a rented frontier model or Composer. What Cursor controls is how that output reaches the codebase. Edits are shown to the developer as diffs to review and accept or reject, and the agent can run tests and read their output before it finishes, as it did in both of our runs (Table~\ref{tab:grok-trace}). Composer's training also targets generation directly, rewarding it for avoiding unnecessary responses and unsupported claims, and Cursor reports that it generates roughly four times faster than similar models \citep{cursor2025composer}. We would therefore consider generation latent, with an explicit review step placed between the model's output and the user's code.
+
+\subsection{Interfaces}
+
+The interfaces between the boxes are the most explicit part of Cursor, and they are written separately for each model vendor. The clearest example is the edit format. OpenAI models are given a patch-based format, while Anthropic models are given string replacement, because each model was trained on its own format and an unfamiliar one ``costs extra reasoning tokens and produces more mistakes'' \citep{heule2026harness}. Prompts are also tuned per provider and even per model version \citep{heule2026harness}.
+
+The interface from the environment back to the policy is explicit as well. When a tool call fails, the harness returns a typed error, such as \texttt{InvalidArguments}, \texttt{UnexpectedEnvironment}, \texttt{ProviderError}, \texttt{UserAborted}, or \texttt{Timeout}, and any other error is treated as a bug in the harness itself \citep{heule2026harness}. This plays the role of the observation in the classical model, since it tells the policy what kind of failure happened rather than only that one did. After a focused effort, Cursor reports tool calls at two, and often three, nines of reliability \citep{heule2026harness}. Our Grok run hit this channel directly. Its first \texttt{pytest} call came back as a ``Terminal unavailable'' error, because the machine could not enforce the workspace sandbox the command required, and the message stated that this was ``not a permission denial.'' The agent read the error, reran the tests outside the sandbox two seconds later, and all ten passed (Table~\ref{tab:grok-trace}).
+
+Because these interfaces are built per vendor, they are not a universal schema in the way a dialogue-act ontology would be. Instead, they form a set of one-to-one adapters, one per model, and this is the source of the model-switching seam discussed below. We would consider interfaces explicit, and more carefully engineered than any other box.
+
+
+\section{The Seam}
+
+Cursor's weak points show up in two places. The first is where its harness meets a model it doesn't own, and the second is where a conversation happens outside the codebase. Looking at four documented problems, each one points back to a specific box in the decomposition.
+
+The first problem was cost. Until mid-2025, Cursor Pro gave users 500 requests a month. That worked for simple chat, but agent mode changed things. One request could now set off a long chain of tool calls, so some requests cost far more than others, while Cursor was paying model vendors by the token. In June 2025, Cursor replaced the request limit with \$20 of frontier-model usage per month at API prices, plus unlimited use of Tab and Auto mode \citep{cursor2025pricing}. Many users still expected the old 500-request limit and got surprise bills. Cursor apologized that the change ``was not communicated clearly'' and refunded unexpected charges from June 16 to July 4 \citep{cursor2025pricing}. This shows a gap between policy and cost. The agent decides how many tokens a task uses, but Cursor doesn't control what those tokens cost. It also explains why Cursor works so hard on context management. Dynamic context discovery cut token use nearly in half on MCP runs \citep{katz2026dynamic}, which improves quality and protects Cursor's margins at the same time.
+
+The second problem appears when users switch between models. Because Cursor gives each model its own tool formats and prompts, changing models in the middle of a chat is harder than it looks. The new model has to read a history written by a different model, it may try to call tools it doesn't have, and the prompt cache resets, which makes the next turn slower and more expensive \citep{heule2026harness}. Summarizing the chat at the switch helps, but details get lost. Cursor's own advice is to stick with one model per chat, or to start a subagent with a fresh context \citep{heule2026harness}. So the decomposition isn't built once. The boxes stay the same, but Cursor rebuilds the connections between them for every model.
+
+To get out from under both of these problems, Cursor started training its own model. Composer 2 launched on March 19, 2026. It costs about 90\% less per token than Claude Opus 4.6 and scores higher on two coding benchmarks \citep{datacamp2026composer2}. However, the base model wasn't Cursor's. A day after launch, developers found a model ID in API requests showing it was built on Moonshot AI's open Kimi K2.5 \citep{datacamp2026composer2}. Cursor said about three quarters of the training compute was its own, called the lack of disclosure ``a miss,'' and promised to name base models in the future \citep{datacamp2026composer2}. This shows Cursor bringing the model in-house, but only partly. It now shapes policy by training with reinforcement learning in its own harness \citep{cursor2025composer}, while understanding and generation still depend on another company's pretrained model.
+
+The clearest failure, though, happened outside the editor entirely. In April 2025, a bug started logging users out when they switched devices. Cursor's AI support bot, which signed its emails as ``Sam,'' told customers this was expected under a new one-device policy. That policy didn't exist, and users publicly canceled their subscriptions \citep{fortune2025sam}. Co-founder Michael Truell later apologized for ``an incorrect response from a front-line AI support bot'' \citep{fortune2025sam}. Inside the editor, Cursor grounds every answer in real files and makes users review changes before anything happens. The support bot had none of that. It couldn't look up actual company policy, had no information about the outage, and nothing checked its answer before it went out. If you only count whether the bot handled the ticket without a human, it succeeded. If you count whether it actually solved the customer's problem, it failed, because the customer left. Cursor built careful grounding into its product but left it out of everything else.
+
+\section{Measured Behavior}
+
+We evaluated Cursor on a fixed task: adding late fees to a small Python library application while preserving existing behavior. The requirements included a daily fee, a per-loan cap, a premium-member grace period, and fee formatting in the CLI report. We initially planned a four-model comparison, but the available Free account rejected named-model requests. We therefore retained the team's archived Grok 4.6 High Fast editor run and conducted one supplementary Auto CLI run. The archived Grok record reported 74 seconds and 19 tool calls; applying its saved patch reproduced passes on all nine held-out tests. The Auto coding invocation took 33.9 seconds, made 14 tool calls, and passed all six original visible tests and all nine held-out tests. Its calls included repository searches, file reads, edits, a test command, and bookkeeping. In a separate follow-up after timing stopped, Auto estimated its duration as 90 seconds, approximately 2.65 times the measured duration, while correctly estimating 14 tool calls. This discrepancy illustrates why model self-reports require external verification. These observations do not support a controlled model ranking: the runs used different interfaces, Auto did not disclose its underlying model, and each configuration had only one observation. Token totals also used unreconciled reporting conventions, and dollar costs were unavailable. Finally, held-out test success measures behavior on those cases, not longitudinal code retention or Keep Rate.
+
+\section{Verdict}
+
+Cursor illustrates how a conversational system combines explicit infrastructure with latent model behavior. Search, file access, editing, and execution tools connect the model to an observable codebase, while the model determines which actions to take through those interfaces. Our Auto trace makes this interaction concrete, and the held-out tests provide an external check on the generated change. However, a successful patch does not establish that the system understands the user's broader goal, and the inaccurate duration estimate shows that its own account of its behavior can be unreliable. Our measurements support a narrow conclusion: Cursor completed this bounded task successfully. They do not isolate the contribution of the harness or establish model superiority. The broader argument for context management and interface engineering therefore rests on the public engineering evidence discussed above, supplemented by our observed tool sequence and independently recorded outcomes.
+
+\section{Document Body (THIS SECTION AND ALL FOLLOWING ARE INCLUDED BY THE TEMPLATE AND CAN BE DELETED EVENTUALLY. I LIKE HAVING THE TEMPLATE INFO HERE THOUGH FOR NOW)}
+
+\subsection{Footnotes}
+
+Footnotes are inserted with the \verb|\footnote| command.\footnote{This is a footnote.}
+
+\subsection{Tables and figures}
+
+See Table~\ref{tab:accents} for an example of a table and its caption.
+\textbf{Do not override the default caption sizes.}
+
+\begin{table}
+  \centering
+  \begin{tabular}{lc}
+    \hline
+    \textbf{Command} & \textbf{Output} \\
+    \hline
+    \verb|{\"a}|     & {\"a}           \\
+    \verb|{\^e}|     & {\^e}           \\
+    \verb|{\`i}|     & {\`i}           \\
+    \verb|{\.I}|     & {\.I}           \\
+    \verb|{\o}|      & {\o}            \\
+    \verb|{\'u}|     & {\'u}           \\
+    \verb|{\aa}|     & {\aa}           \\\hline
+  \end{tabular}
+  \begin{tabular}{lc}
+    \hline
+    \textbf{Command} & \textbf{Output} \\
+    \hline
+    \verb|{\c c}|    & {\c c}          \\
+    \verb|{\u g}|    & {\u g}          \\
+    \verb|{\l}|      & {\l}            \\
+    \verb|{\~n}|     & {\~n}           \\
+    \verb|{\H o}|    & {\H o}          \\
+    \verb|{\v r}|    & {\v r}          \\
+    \verb|{\ss}|     & {\ss}           \\
+    \hline
+  \end{tabular}
+  \caption{Example commands for accented characters, to be used in, \emph{e.g.}, Bib\TeX{} entries.}
+  \label{tab:accents}
+\end{table}
+
+As much as possible, fonts in figures should conform
+to the document fonts. See Figure~\ref{fig:experiments} for an example of a figure and its caption.
+
+Using the \verb|graphicx| package graphics files can be included within figure
+environment at an appropriate point within the text.
+The \verb|graphicx| package supports various optional arguments to control the
+appearance of the figure.
+You must include it explicitly in the \LaTeX{} preamble (after the
+\verb|\documentclass| declaration and before \verb|\begin{document}|) using
+\verb|\usepackage{graphicx}|.
+
+\begin{figure}[t]
+  \includegraphics[width=\columnwidth]{example-image-golden}
+  \caption{A figure with a caption that runs for more than one line.
+    Example image is usually available through the \texttt{mwe} package
+    without even mentioning it in the preamble.}
+  \label{fig:experiments}
+\end{figure}
+
+\begin{figure*}[t]
+  \includegraphics[width=0.48\linewidth]{example-image-a} \hfill
+  \includegraphics[width=0.48\linewidth]{example-image-b}
+  \caption {A minimal working example to demonstrate how to place
+    two images side-by-side.}
+\end{figure*}
+
+\subsection{Hyperlinks}
+
+Users of older versions of \LaTeX{} may encounter the following error during compilation:
+\begin{quote}
+\verb|\pdfendlink| ended up in different nesting level than \verb|\pdfstartlink|.
+\end{quote}
+This happens when pdf\LaTeX{} is used and a citation splits across a page boundary. The best way to fix this is to upgrade \LaTeX{} to 2018-12-01 or later.
+
+\subsection{Citations}
+
+\begin{table*}
+  \centering
+  \begin{tabular}{lll}
+    \hline
+    \textbf{Output}           & \textbf{natbib command} & \textbf{ACL only command} \\
+    \hline
+    \citep{Gusfield:97}       & \verb|\citep|           &                           \\
+    \citealp{Gusfield:97}     & \verb|\citealp|         &                           \\
+    \citet{Gusfield:97}       & \verb|\citet|           &                           \\
+    \citeyearpar{Gusfield:97} & \verb|\citeyearpar|     &                           \\
+    \citeposs{Gusfield:97}    &                         & \verb|\citeposs|          \\
+    \hline
+  \end{tabular}
+  \caption{\label{citation-guide}
+    Citation commands supported by the style file.
+    The style is based on the natbib package and supports all natbib citation commands.
+    It also supports commands defined in previous ACL style files for compatibility.
+  }
+\end{table*}
+
+Table~\ref{citation-guide} shows the syntax supported by the style files.
+We encourage you to use the natbib styles.
+You can use the command \verb|\citet| (cite in text) to get ``author (year)'' citations, like this citation to a paper by \citet{Gusfield:97}.
+You can use the command \verb|\citep| (cite in parentheses) to get ``(author, year)'' citations \citep{Gusfield:97}.
+You can use the command \verb|\citealp| (alternative cite without parentheses) to get ``author, year'' citations, which is useful for using citations within parentheses (e.g. \citealp{Gusfield:97}).
+
+A possessive citation can be made with the command \verb|\citeposs|.
+This is not a standard natbib command, so it is generally not compatible
+with other style files.
+
+\subsection{References}
+
+\nocite{Ando2005,andrew2007scalable,rasooli-tetrault-2015}
+
+The \LaTeX{} and Bib\TeX{} style files provided roughly follow the American Psychological Association format.
+If your own bib file is named \texttt{custom.bib}, then placing the following before any appendices in your \LaTeX{} file will generate the references section for you:
+\begin{quote}
+\begin{verbatim}
+\bibliography{custom}
+\end{verbatim}
+\end{quote}
+
+You can obtain the complete ACL Anthology as a Bib\TeX{} file from \url{https://aclweb.org/anthology/anthology.bib.gz}.
+To include both the Anthology and your own .bib file, use the following instead of the above.
+\begin{quote}
+\begin{verbatim}
+\bibliography{anthology,custom}
+\end{verbatim}
+\end{quote}
+
+Please see Section~\ref{sec:bibtex} for information on preparing Bib\TeX{} files.
+
+\subsection{Equations}
+
+An example equation is shown below:
+\begin{equation}
+  \label{eq:example}
+  A = \pi r^2
+\end{equation}
+
+Labels for equation numbers, sections, subsections, figures and tables
+are all defined with the \verb|\label{label}| command and cross references
+to them are made with the \verb|\ref{label}| command.
+
+This an example cross-reference to Equation~\ref{eq:example}.
+
+\subsection{Appendices}
+
+Use \verb|\appendix| before any appendix section to switch the section numbering over to letters. See Appendix~\ref{sec:appendix} for an example.
+
+\section{Bib\TeX{} Files}
+\label{sec:bibtex}
+
+Unicode cannot be used in Bib\TeX{} entries, and some ways of typing special characters can disrupt Bib\TeX's alphabetization. The recommended way of typing special characters is shown in Table~\ref{tab:accents}.
+
+Please ensure that Bib\TeX{} records contain DOIs or URLs when possible, and for all the ACL materials that you reference.
+Use the \verb|doi| field for DOIs and the \verb|url| field for URLs.
+If a Bib\TeX{} entry has a URL or DOI field, the paper title in the references section will appear as a hyperlink to the paper, using the hyperref \LaTeX{} package.
+
+\section*{Limitations}
+
+This document does not cover the content requirements for ACL or any
+other specific venue.  Check the author instructions for
+information on
+maximum page lengths, the required ``Limitations'' section,
+and so on.
+
+\section*{Acknowledgments}
+
+This document has been adapted
+by Steven Bethard, Ryan Cotterell and Rui Yan
+from the instructions for earlier ACL and NAACL proceedings, including those for
+ACL 2019 by Douwe Kiela and Ivan Vuli\'{c},
+NAACL 2019 by Stephanie Lukin and Alla Roskovskaya,
+ACL 2018 by Shay Cohen, Kevin Gimpel, and Wei Lu,
+NAACL 2018 by Margaret Mitchell and Stephanie Lukin,
+Bib\TeX{} suggestions for (NA)ACL 2017/2018 from Jason Eisner,
+ACL 2017 by Dan Gildea and Min-Yen Kan,
+NAACL 2017 by Margaret Mitchell,
+ACL 2012 by Maggie Li and Michael White,
+ACL 2010 by Jing-Shin Chang and Philipp Koehn,
+ACL 2008 by Johanna D. Moore, Simone Teufel, James Allan, and Sadaoki Furui,
+ACL 2005 by Hwee Tou Ng and Kemal Oflazer,
+ACL 2002 by Eugene Charniak and Dekang Lin,
+and earlier ACL and EACL formats written by several people, including
+John Chen, Henry S. Thompson and Donald Walker.
+Additional elements were taken from the formatting instructions of the \emph{International Joint Conference on Artificial Intelligence} and the \emph{Conference on Computer Vision and Pattern Recognition}.
+
+% Bibliography entries for the entire Anthology, followed by custom entries
+%\bibliography{custom,anthology-overleaf-1,anthology-overleaf-2}
+
+% Custom bibliography entries only
+\bibliography{custom}
+
+\appendix
+
+\section{Example Appendix}
+\label{sec:appendix}
+
+This is an appendix.
+
+\end{document}

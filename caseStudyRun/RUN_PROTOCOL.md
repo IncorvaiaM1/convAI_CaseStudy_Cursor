@@ -1,10 +1,10 @@
 # Cursor run protocol (Fair A, A4)
 
-One fixed task, four runs: three frontier models plus Composer 2. One run doubles as the annotated-transcript exhibit.
+The original plan was one fixed task across four models. The paper ultimately reports one Grok editor run and one Auto CLI run; only the Grok artifacts are included in this checkout. The procedure below describes the original plan and how to collect future runs, not four completed experiments.
 
 ## Folders
 
-- `cursor-task/`: the repo the agent works on. Every run starts from its FIRST commit, whatever is checked out.
+- `cursor-task/`: the repo the agent works on. In this checkout, the harness copies this directory as the baseline. If it contains a nested Git repository, the harness instead archives that repository's first commit.
 - `cursor-eval/test_hidden.py`: 9 held-out tests the agent never sees.
 - `harness.py`: runs, measures, logs and grades automatically (below).
 - `harness_log.csv`: written by the harness. `runs_log.csv`: your manual runs, left alone.
@@ -36,20 +36,12 @@ In this repo, add late fees to the library. A loan is late for each day after it
 
 ## Manual runs (in the editor)
 
-1. `git checkout main` (your base branch), then `git checkout -b run-<model>`.
-2. New chat, Agent mode, pick the model by name (not Auto). Don't switch models mid-chat.
-3. Paste the prompt and time it; don't step in (if it asks, reply `Use your best judgment.`).
-4. Save the transcript, and copy tokens and cost from the usage dashboard.
-5. Score it:
-   ```
-   git add -A
-   git commit -m "agent run"
-   git diff main --shortstat
-   copy ..\cursor-eval\test_hidden.py tests\
-   python -m pytest -q
-   del tests\test_hidden.py
-   ```
-6. Log it in `runs_log.csv`.
+1. Copy `cursor-task/` into a separate directory outside this repository. Initialize Git there and commit the unchanged baseline. Do not expose `cursor-eval/` to the agent.
+2. Open only that copied directory in Cursor. Start a new Agent chat and record the exact model label and mode.
+3. Paste the shared prompt and time the coding invocation. Record any intervention or clarification.
+4. Save the transcript and patch before adding held-out tests. Record total tool calls and any excluded categories separately.
+5. After the agent has finished, copy `cursor-eval/test_hidden.py` into the copy's `tests/` directory and run `python -m pytest -q`. Keep the test output with the run evidence.
+6. Record results in `runs_log.csv`. Leave unavailable tokens or cost blank rather than estimating them.
 
 ## Send back
 

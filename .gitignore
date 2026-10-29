@@ -23,3 +23,35 @@ caseStudyRun/runs/*/base.zip
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# LaTeX build output
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+*.bbl
+*.blg
+
+# Local credentials and machine-specific state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.codex/
+.agents/
+
+# Local review and build artifacts
+/tmp/
+/output/
+/build/
+paper/reviewed/*.pdf
+*.toc
+*.nav
+*.snm
+*.vrb
+*.xdv
+*.bcf
+*.run.xml

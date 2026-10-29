@@ -1,0 +1,11 @@
+# Normalize source and documentation; keep binary artifacts untouched.
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.tex text eol=lf
+*.bib text eol=lf
+*.csv text eol=lf
+*.patch text eol=lf
+*.pdf binary
+*.pptx binary
+*.docx binary

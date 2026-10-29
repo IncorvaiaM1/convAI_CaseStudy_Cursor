@@ -1,0 +1,171 @@
+\documentclass[11pt]{article}
+
+% Change "review" to "final" to generate the final (sometimes called camera-ready) version.
+% Change to "preprint" to generate a non-anonymous version with page numbers.
+\usepackage[preprint]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+
+% For proper rendering and hyphenation of words containing Latin characters (including in bib files)
+\usepackage[T1]{fontenc}
+% For Vietnamese characters
+% \usepackage[T5]{fontenc}
+% See https://www.latex-project.org/help/documentation/encguide.pdf for other character sets
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out,
+% but it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+%Including images in your LaTeX document requires adding
+%additional package(s)
+\usepackage{graphicx}
+\usepackage{array}
+
+% If the title and author information does not fit in the area allocated, uncomment the following
+%
+%\setlength\titlebox{<dim>}
+%
+% and set <dim> to something 5cm or larger.
+
+\title{Cursor Case Study}
+
+\author{Michael Incorvaia \and Greyson McReynolds \and Heeba Merchant \and Canting Zhu \\
+       ECE 6256 / CS 6604 - Prof. Heck}
+
+
+\begin{document}
+\maketitle
+\begin{abstract}
+Cursor is an AI code editor that wraps frontier models from several vendors, along with its own models, in an agent harness that searches, edits and runs code in a developer's repository. We map Cursor onto the classical decomposition of understanding, state, policy, generation and their interfaces, using engineering posts, third-party reporting and our own runs. Understanding and state combine explicit indexing, retrieval and context management with latent model behavior, while generation remains latent. Action selection also remains latent, although Cursor increasingly trains its own policies through reinforcement learning; interfaces are explicit and adapted to individual models. We examine seams in pricing and model switching, along with a separate grounding failure in customer support. In two runs of a fixed coding task, both agents passed all nine held-out tests, but one estimated its run time at 2.65 times the recorded duration. These observations illustrate the value of external checks on both generated code and an agent's account of its own behavior.
+\end{abstract}
+
+\section{Cursor Introduction}
+
+Cursor is an AI code editor developed by Anysphere and forked from VS Code. It combines models from Anthropic, OpenAI, Google and xAI with its own models, including Tab and Composer 2. Composer 2 builds on Moonshot's Kimi K2.5 \citep{datacamp2026composer2}. The agent harness lets these models read, search, edit and run code in a developer's repository. The user is a developer; the environment the dialogue acts on includes the codebase and terminal.
+
+We examine how Cursor implements the classical boxes of understanding, state, policy, generation and their interfaces. Our question is which components remain explicit and which functions have moved into the model. Pricing changes, model-switching limitations and a support bot's invented policy expose different boundaries of the system; we use these incidents to distinguish documented behavior from inferences about its architecture.
+
+\section{Classical Boxes}
+
+For each of the five boxes, we examine how Cursor implements it and whether that implementation is explicit, latent in the model, or missing. Table~\ref{tab:map} summarizes our answers; the subsections below give the evidence.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}l l >{\raggedright\arraybackslash}p{0.45\columnwidth}@{}}
+    \hline
+    \textbf{Box} & \textbf{Status} & \textbf{In Cursor} \\
+    \hline
+    Understanding & Both & Indexing and semantic search ground the request; the model interprets it \\
+    State & Both & Static context plus files for history and tool output; the model chooses what to fetch \\
+    Policy & Latent & Chosen in the model; shaped by Tab's reward, Composer's RL, plan mode and Router \\
+    Generation & Latent & Model output, reviewed by the user as diffs \\
+    Interfaces & Explicit & Per-vendor edit formats and prompts; typed tool errors \\
+    Limitations & Partial & Grounding can fail; success metrics approximate the user's broader goal \\
+    \hline
+  \end{tabular}
+  \caption{Cursor mapped onto the classical decomposition.}
+  \label{tab:map}
+\end{table}
+
+\subsection{Understanding}
+
+Before a user submits a prompt, Cursor can prepare the codebase for retrieval through an indexing pipeline. The pipeline divides code into syntactic chunks and converts them into embeddings. When files change, Merkle trees use cryptographic hashes to identify affected files and directories. Cursor then reuses cached embeddings for unchanged chunks and computes embeddings for modified ones, avoiding unnecessary recomputation \citep{cursor2026indexing}.
+
+For a coding request, semantic search retrieves code related to the user's instructions \citep{cursor2025semantic}. The language model interprets the request using the retrieved context. Retrieval supplies relevant evidence, but it does not by itself establish that the model has understood the user's intent.
+
+Understanding therefore combines explicit and latent components. Chunking, indexing and retrieval form an explicit pipeline for grounding requests in code; the learned representations and the model's interpretation of the request remain latent.
+
+
+\subsection{State}
+
+Cursor supplies static context such as the operating system, git status, and current and recently viewed files \citep{heule2026harness}. It also makes context available dynamically, including conversation history and long tool outputs stored in files. The harness exposes this material through tools, while the model chooses what to retrieve \citep{katz2026dynamic}. For Composer, a fixed context-length trigger initiates self-summarization; the model writes a shorter account of the context before continuing \citep{cassano2026composer}.
+
+State is both explicit and latent. Files, conversation records and summaries are explicit representations maintained by the harness; the model's judgments about relevance and what to preserve are learned. These mechanisms play a role analogous to belief-state construction, although they are not an explicit probability distribution over dialogue states.
+
+
+\subsection{Policy}
+
+In the classical decomposition, the policy maps a belief state to the next dialogue act, such as asking, confirming or acting. A reward can make the trade-off between these choices explicit. In Cursor, actions include searching the codebase, reading files, editing code, running commands, asking questions and stopping to answer. The model selects the next action, while the harness determines which tools and controls are available. Cursor shapes this policy at three levels.
+
+Tab, Cursor's autocomplete model, learns when to suggest an edit and when to remain silent. Cursor illustrates the incentive with rewards of $+0.75$ for acceptance, $-0.25$ for rejection and $0$ for silence; in this simplified example, suggesting has positive expected reward when acceptance probability exceeds 25\%. The production reward is more complex and also accounts for suggestion size and subsequent actions. Cursor reports that Tab handles over 400 million requests per day and that online reinforcement learning produced 21\% fewer suggestions with a 28\% higher acceptance rate \citep{jackson2025tabrl}.
+
+For agentic coding, Cursor trains Composer with reinforcement learning in sandboxed environments using the product's tools, encouraging efficient tool use, parallel execution and evidence-backed answers \citep{cursor2025composer}. Composer also learns to summarize its context. Summaries are part of the trajectory evaluated by the final task reward, allowing training to favor summaries that preserve useful information. Cursor reports 50\% less compaction error than a targeted prompt-based baseline while using one fifth of the compaction tokens \citep{cassano2026composer}. This makes state management part of the learned policy.
+
+For the frontier models Cursor rents, it cannot change the weights, so it adds explicit controls instead. Plan mode has the agent research the codebase, ask clarifying questions, and write an editable plan before changing anything \citep{smith2025planmode}, which works as a user-selectable ``confirm before acting'' policy. Cursor Router is a classifier that picks a model for each request based on its task type and complexity, trained on over 600,000 live requests with user satisfaction as the reward \citep{cursor2026router}. Meanwhile, earlier guardrails such as a cap on tool calls per turn have mostly been removed as the models improved \citep{heule2026harness}.
+
+Our Grok 4.6 High Fast run illustrates action selection (Table~\ref{tab:grok-trace}). The recovered conversation contains 24 tool calls, or 19 excluding four to-do updates and one tool lookup. Before editing, the agent searched for relevant symbols and read six files in a parallel batch. It then added four tests to the six original tests, ran the suite and checked the CLI output on sample data. These observations show how this model used Cursor's tools; they do not establish that it learned the behavior through Cursor's training.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}l c >{\raggedright\arraybackslash}p{0.62\columnwidth}@{}}
+    \hline
+    \textbf{Calls} & \textbf{Box} & \textbf{What the agent did} \\
+    \hline
+    2--3   & U   & Globbed the repo and searched for \texttt{class Library}, \texttt{fees\_owed} and \texttt{def report} \\
+    4      & S   & Wrote a to-do plan \\
+    5--10  & S/P & Read six files in one parallel batch \\
+    14--16 & G   & Edited \texttt{library.py} (twice) and \texttt{cli.py} \\
+    17     & G   & Wrote its own tests for the premium grace period, the \$10 cap, still-out loans and the report line \\
+    19     & I   & \texttt{pytest} blocked by a ``Terminal unavailable'' sandbox error ($t = 48$\,s) \\
+    22     & P   & Reran outside the sandbox; 10 passed ($t = 50$\,s) \\
+    23     & P   & Ran the CLI on sample data to check the report ($t = 64$\,s), then stopped \\
+    \hline
+  \end{tabular}
+  \caption{Annotated excerpt of our Grok 4.6 High Fast run, recovered from Cursor's local chat history. Calls number all 24 tool calls in order. U, S, P, G and I mark understanding, state, policy, generation and interfaces.}
+  \label{tab:grok-trace}
+\end{table}
+
+Policy is latent in its action selection but constrained by explicit tools and controls. Cursor can train that policy directly for its own models, while routing and prompting shape the behavior of externally hosted models. Acceptance, benchmark success and inferred satisfaction provide useful reward signals, but none alone establishes that the user's broader goal was met.
+
+
+
+\subsection{Generation}
+
+Generation remains latent in the underlying model, which produces code and natural-language responses. Cursor controls how those outputs are applied and presented for review. Developers can inspect diffs and accept or reject changes, while the agent can run tests and read their output before finishing. Our Grok trace shows this edit-and-test cycle (Table~\ref{tab:grok-trace}). The review interface is explicit, but it does not make the generation process itself explicit.
+
+\subsection{Interfaces}
+
+The interfaces between the boxes are the most explicit part of Cursor, and they are written separately for each model vendor. The clearest example is the edit format. OpenAI models are given a patch-based format, while Anthropic models are given string replacement, because each model was trained on its own format and an unfamiliar one ``costs extra reasoning tokens and produces more mistakes'' \citep{heule2026harness}. Prompts are also tuned per provider and even per model version \citep{heule2026harness}.
+
+The interface from the environment back to the policy is explicit as well. When a tool call fails, the harness returns a typed error, such as \texttt{InvalidArguments}, \texttt{UnexpectedEnvironment}, \texttt{ProviderError}, \texttt{UserAborted}, or \texttt{Timeout}, and any other error is treated as a bug in the harness itself \citep{heule2026harness}. This plays the role of the observation in the classical model, since it tells the policy what kind of failure happened rather than only that one did. Our Grok run illustrates how an execution error can inform the next action. Its first \texttt{pytest} call came back as a ``Terminal unavailable'' error, because the machine could not enforce the workspace sandbox the command required, and the message stated that this was ``not a permission denial.'' The agent read the error, reran the tests outside the sandbox two seconds later, and all ten passed (Table~\ref{tab:grok-trace}).
+
+Because these interfaces are built per vendor, they are not a universal schema in the way a dialogue-act ontology would be. Instead, they form a set of one-to-one adapters, one per model, and this is the source of the model-switching seam discussed below. Interfaces are therefore explicit, with documented engineering tailored to individual models.
+
+
+
+\section{The Seam}
+
+The evidence reveals several seams between model behavior, harness design and product expectations. Pricing and model switching expose dependencies on external providers; Composer 2 raises questions about model ownership and disclosure. A separate customer-support incident demonstrates the consequences of an answer that is not grounded in actual policy.
+
+The first problem was cost. Until mid-2025, Cursor Pro gave users 500 requests a month. In agent mode, one request can set off a long chain of tool calls, so some requests cost far more than others, while Cursor pays model vendors by the token. In June 2025, Cursor replaced the request limit with \$20 of frontier-model usage per month at API prices, plus unlimited use of Tab and Auto mode \citep{cursor2025pricing}. Many users still expected the old 500-request limit and got surprise bills. Cursor apologized that the change ``was not communicated clearly'' and refunded unexpected charges from June 16 to July 4 \citep{cursor2025pricing}. This shows a gap between policy and cost. The agent's actions affect token consumption, while external providers set the underlying API prices. It also explains why Cursor works so hard on context management. Cursor reports that dynamic context discovery reduced total agent tokens by 46.9\% on its MCP evaluation \citep{katz2026dynamic}. This illustrates how context management can reduce resource use; it does not establish a corresponding reduction in cost for every task.
+
+The second problem appears when users switch between models. Because Cursor gives each model its own tool formats and prompts, changing models in the middle of a chat is harder than it looks. The new model has to read a history written by a different model, it may try to call tools it doesn't have, and the prompt cache resets, which makes the next turn slower and more expensive \citep{heule2026harness}. Cursor's own advice is to stick with one model per chat, or to start a subagent with a fresh context \citep{heule2026harness}. So the decomposition isn't built once. The boxes stay the same, but Cursor rebuilds the connections between them for every model.
+
+Training its own models gives Cursor more control over this relationship. Composer 2 launched on March 19, 2026. At launch, its standard input and output token prices were one tenth of Claude Opus 4.6's listed prices \citep{datacamp2026composer2}. However, the base model wasn't Cursor's. A day after launch, developers found a model ID in API requests showing it was built on Moonshot AI's open Kimi K2.5 \citep{datacamp2026composer2}. Cursor said about three quarters of the training compute was its own, called the lack of disclosure ``a miss,'' and promised to name base models in the future \citep{datacamp2026composer2}. This shows Cursor bringing the model in-house, but only partly. It now shapes policy by training with reinforcement learning in its own harness \citep{cursor2025composer}, while retaining a foundation pretrained by another company. That dependency does not imply that subsequent training changes only policy; it can also change interpretation and generation.
+
+A separate failure occurred in customer support. In April 2025, Cursor's support bot, ``Sam,'' invented a one-device policy in response to logout complaints \citep{fortune2025sam}. The incident demonstrates a failure to ground the response in actual policy, but it does not establish whether retrieval, outage information or other safeguards were absent. It also illustrates a measurement problem. An automated reply could count as handling a ticket without demonstrating that the customer's problem was solved. The lesson is that fluent generation and apparent completion are insufficient evidence of task success.
+
+\section{Measured Behavior}
+
+We evaluated Cursor on a fixed task, adding late fees to a small Python library application while preserving existing behavior. The requirements included a daily fee, a per-loan cap, a premium grace period, and a fee line in the CLI report. We planned a four-model comparison, but the available Free account rejected named-model requests, so we report our Grok 4.6 High Fast editor run and one Auto CLI run. The Grok run took 74 seconds and made 24 tool calls, 19 excluding bookkeeping and tool lookup (Table~\ref{tab:grok-trace}); its saved patch passes all nine held-out tests. The Auto coding invocation took 33.9 seconds, made 14 tool calls, and passed all six original visible tests and all nine held-out tests. In a separate follow-up after timing stopped, Auto estimated its duration as 90 seconds, approximately 2.65 times the measured duration, while correctly estimating 14 tool calls. These observations do not support a model ranking. The runs used different interfaces, Auto did not disclose its underlying model, and each configuration ran once. Tool-call and token counts used different conventions, and dollar costs were unavailable. Held-out test success also measures behavior on those cases, not long-term code retention.
+
+\section{Verdict}
+
+Cursor combines explicit infrastructure with latent model behavior. Search, file access, editing, and execution tools connect the model to an observable codebase, while the model decides which actions to take through them, as our Grok trace shows (Table~\ref{tab:grok-trace}). Both patches passed the nine held-out tests, but a passing patch does not show that the system understood the user's broader goal, and the inaccurate duration estimate shows that an agent's account of itself needs an outside check. Our measurements support only a narrow conclusion, that Cursor completed this bounded task; the broader case for context management and interface engineering rests on the public evidence above.
+
+\clearpage
+\bibliography{custom}
+\end{document}
